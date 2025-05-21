@@ -1,0 +1,680 @@
+import random
+import sys
+import time
+import math
+
+# Game constants
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 600
+CARD_WIDTH = 80
+CARD_HEIGHT = 120
+
+# Colors (for terminal output)
+BLACK = "black"
+WHITE = "white"
+GREEN = "green"
+DARK_GREEN = "dark green"
+RED = "red"
+BLUE = "blue"
+CARD_COLOR = "light gray"
+GOLD = "gold"
+CHIP_COLORS = {
+    1: "white",     # White for $1
+    5: "red",       # Red for $5
+    25: "blue",     # Blue for $25
+    100: "black"    # Black for $100
+}
+
+# Game state variables
+player_hand = []
+dealer_hand = []
+deck = []
+game_over = False
+player_turn = True
+player_stood = False
+game_result = ""
+player_money = 1000
+current_bet = 0
+selected_chip = 25  # Default selected chip value
+can_double_down = False
+can_split = False
+double_down_active = False
+split_active = False
+split_hand = []
+split_turn = False
+tutorial_mode = False
+
+# Card suits and ranks
+suits = ['hearts', 'diamonds', 'clubs', 'spades']
+ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+
+# Card values
+card_values = {
+    '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
+    'J': 10, 'Q': 10, 'K': 10, 'A': 11
+}
+
+# Game statistics
+stats = {
+    'games_played': 0,
+    'player_wins': 0,
+    'dealer_wins': 0,
+    'pushes': 0,
+    'blackjacks': 0,
+    'busts': 0,
+    'max_money': 1000,
+    'biggest_win': 0
+}
+
+def create_deck():
+    """Create a new deck of cards."""
+    deck = []
+    for suit in suits:
+        for rank in ranks:
+            deck.append({'rank': rank, 'suit': suit})
+    random.shuffle(deck)
+    return deck
+
+def draw_card(deck):
+    """Draw a card from the deck."""
+    if len(deck) == 0:
+        return None
+    return deck.pop()
+
+def calculate_score(hand):
+    """Calculate the score of a hand."""
+    score = 0
+    aces = 0
+    
+    for card in hand:
+        rank = card['rank']
+        score += card_values[rank]
+        if rank == 'A':
+            aces += 1
+    
+    # Adjust for aces
+    while score > 21 and aces > 0:
+        score -= 10
+        aces -= 1
+    
+    return score
+
+def is_bust(hand):
+    """Check if hand is bust."""
+    return calculate_score(hand) > 21
+
+def is_blackjack(hand):
+    """Check if hand is a blackjack."""
+    if len(hand) != 2:
+        return False
+    
+    has_ace = False
+    has_ten = False
+    
+    for card in hand:
+        if card['rank'] == 'A':
+            has_ace = True
+        elif card['rank'] in ['10', 'J', 'Q', 'K']:
+            has_ten = True
+    
+    return has_ace and has_ten
+
+def display_card(card):
+    """Return a string representation of a card."""
+    if card['suit'] in ['hearts', 'diamonds']:
+        symbol = '♥' if card['suit'] == 'hearts' else '♦'
+        return f"{card['rank']}{symbol} (red)"
+    else:
+        symbol = '♣' if card['suit'] == 'clubs' else '♠'
+        return f"{card['rank']}{symbol} (black)" 
+
+def display_hand(hand, hide_first=False):
+    """Display a hand of cards."""
+    result = []
+    for i, card in enumerate(hand):
+        if i == 0 and hide_first:
+            result.append("[HIDDEN]")
+        else:
+            result.append(display_card(card))
+    return ", ".join(result)
+
+def can_double_down_check(hand):
+    """Check if player can double down."""
+    # Can only double down on first two cards
+    return len(hand) == 2 and player_money >= current_bet
+
+def can_split_check(hand):
+    """Check if player can split."""
+    # Can only split if first two cards have same rank
+    return (len(hand) == 2 and 
+            hand[0]['rank'] == hand[1]['rank'] and 
+            player_money >= current_bet)
+
+def dealer_play():
+    """Dealer's play logic."""
+    global player_turn, game_over, game_result, player_money, stats
+    
+    if tutorial_mode:
+        print("\n[TUTORIAL] The dealer must draw cards until reaching a score of at least 17.")
+    
+    # Dealer draws until reaching at least 17
+    while calculate_score(dealer_hand) < 17:
+        dealer_hand.append(draw_card(deck))
+        print(f"Dealer draws: {display_card(dealer_hand[-1])}")
+        print(f"Dealer's hand: {display_hand(dealer_hand)}")
+        print(f"Dealer's score: {calculate_score(dealer_hand)}")
+        time.sleep(1)
+    
+    # Check results
+    dealer_score = calculate_score(dealer_hand)
+    player_score = calculate_score(player_hand)
+    
+    if is_bust(dealer_hand):
+        game_result = "Dealer busts! You win!"
+        player_money += current_bet * 2  # Return bet + winnings
+        stats['player_wins'] += 1
+        stats['biggest_win'] = max(stats['biggest_win'], current_bet)
+    elif dealer_score > player_score:
+        game_result = "Dealer wins!"
+        stats['dealer_wins'] += 1
+    elif dealer_score < player_score:
+        game_result = "You win!"
+        player_money += current_bet * 2  # Return bet + winnings
+        stats['player_wins'] += 1
+        stats['biggest_win'] = max(stats['biggest_win'], current_bet)
+    else:
+        game_result = "Push! It's a tie!"
+        player_money += current_bet  # Return bet
+        stats['pushes'] += 1
+    
+    # Check split hand if active
+    if split_active:
+        split_score = calculate_score(split_hand)
+        print("\nChecking split hand...")
+        print(f"Split hand: {display_hand(split_hand)}")
+        print(f"Split score: {split_score}")
+        
+        if is_bust(split_hand):
+            game_result += " Split hand busts!"
+        elif is_bust(dealer_hand):
+            game_result += " Split hand wins!"
+            player_money += current_bet * 2  # Return bet + winnings
+            stats['player_wins'] += 1
+        elif dealer_score > split_score:
+            game_result += " Split hand loses!"
+        elif dealer_score < split_score:
+            game_result += " Split hand wins!"
+            player_money += current_bet * 2  # Return bet + winnings
+            stats['player_wins'] += 1
+        else:
+            game_result += " Split hand pushes!"
+            player_money += current_bet  # Return bet
+            stats['pushes'] += 1
+    
+    # Update stats
+    stats['max_money'] = max(stats['max_money'], player_money)
+    game_over = True
+
+def handle_player_bust():
+    """Handle player bust logic."""
+    global player_turn, game_over, game_result, split_turn, stats
+    
+    if split_active and not split_turn:
+        # First hand busts, move to split hand
+        print("First hand busts! Moving to split hand.")
+        split_turn = True
+        stats['busts'] += 1
+        
+        if tutorial_mode:
+            print("\n[TUTORIAL] Your first hand went over 21 and busted. Now you'll play your split hand.")
+    else:
+        # Player busts (both hands if split)
+        game_result = "You bust! Dealer wins!"
+        stats['dealer_wins'] += 1
+        stats['busts'] += 1
+        if split_active and split_turn:
+            game_result += " Split hand busts too!"
+            stats['busts'] += 1
+        player_turn = False
+        game_over = True
+        
+        if tutorial_mode:
+            print("\n[TUTORIAL] Your hand went over 21, which means you bust. In blackjack, if you bust, you lose immediately.")
+
+def handle_blackjack():
+    """Handle blackjack logic."""
+    global player_turn, game_over, game_result, player_money, stats
+    
+    if is_blackjack(player_hand):
+        game_result = "BLACKJACK! You win!"
+        # Blackjack pays 3:2
+        win_amount = int(current_bet * 1.5)
+        player_money += current_bet + win_amount
+        stats['player_wins'] += 1
+        stats['blackjacks'] += 1
+        stats['biggest_win'] = max(stats['biggest_win'], win_amount)
+        player_turn = False
+        game_over = True
+        
+        if tutorial_mode:
+            print("\n[TUTORIAL] You got a blackjack! This means your initial two cards are an Ace and a 10-value card (10, J, Q, or K).")
+            print("[TUTORIAL] Blackjack pays 3:2, meaning for every $2 bet, you win $3.")
+        
+        return True
+    return False
+
+def player_hit():
+    """Player hits (draws a card)."""
+    global player_hand, split_hand, player_turn, game_over, split_turn, can_double_down, can_split
+    
+    if tutorial_mode:
+        print("\n[TUTORIAL] You chose to 'hit', which means you'll draw another card to try to get closer to 21.")
+    
+    # Determine which hand to add card to
+    hand = split_hand if split_active and split_turn else player_hand
+    
+    # Draw a card
+    card = draw_card(deck)
+    hand.append(card)
+    
+    # After hitting, player can no longer double down or split
+    can_double_down = False
+    can_split = False
+    
+    # Display new card
+    print(f"You draw: {display_card(card)}")
+    if split_active:
+        current_hand = "split hand" if split_turn else "first hand"
+        print(f"Your {current_hand}: {display_hand(hand)}")
+        print(f"Your {current_hand} score: {calculate_score(hand)}")
+    else:
+        print(f"Your hand: {display_hand(hand)}")
+        print(f"Your score: {calculate_score(hand)}")
+    
+    # Check if player busts
+    if is_bust(hand):
+        handle_player_bust()
+    elif tutorial_mode and calculate_score(hand) >= 17:
+        print("\n[TUTORIAL] Your score is 17 or higher. It might be safer to stand now to avoid busting.")
+
+def player_stand():
+    """Player stands."""
+    global player_turn, split_turn
+    
+    if tutorial_mode:
+        print("\n[TUTORIAL] You chose to 'stand', which means you're satisfied with your current hand and won't take more cards.")
+    
+    if split_active and not split_turn:
+        # Move to split hand
+        print("Standing on first hand. Moving to split hand.")
+        split_turn = True
+        
+        if tutorial_mode:
+            print("\n[TUTORIAL] Now you'll play your second hand from the split.")
+    else:
+        # Player stands (on both hands if split)
+        print("You stand.")
+        player_turn = False
+        # Dealer's turn
+        print("\nDealer's turn:")
+        print(f"Dealer reveals: {display_card(dealer_hand[0])}")
+        print(f"Dealer's hand: {display_hand(dealer_hand)}")
+        print(f"Dealer's score: {calculate_score(dealer_hand)}")
+        dealer_play()
+
+def player_double_down():
+    """Player doubles down."""
+    global player_money, current_bet, player_turn
+    
+    if tutorial_mode:
+        print("\n[TUTORIAL] You chose to 'double down', which means you'll double your bet and get exactly one more card.")
+        print("[TUTORIAL] After doubling down, you'll automatically stand.")
+    
+    # Double the bet
+    player_money -= current_bet
+    current_bet *= 2
+    print(f"Doubling down! New bet: ${current_bet}")
+    
+    # Draw exactly one card
+    player_hit()
+    
+    # Automatically stand after doubling down
+    if not game_over:  # Only if player didn't bust
+        player_stand()
+
+def player_split():
+    """Player splits their hand."""
+    global player_hand, split_hand, split_active, player_money, current_bet, can_split
+    
+    # Check if player can split
+    if not can_split:
+        print("Cannot split!")
+        return
+    
+    if tutorial_mode:
+        print("\n[TUTORIAL] You chose to 'split', which creates two separate hands from your pair.")
+        print("[TUTORIAL] You'll play each hand separately, and you need to place an additional bet equal to your original bet.")
+    
+    # Take second card from player hand and create split hand
+    split_hand = [player_hand.pop()]
+    
+    # Draw a new card for each hand
+    player_hand.append(draw_card(deck))
+    split_hand.append(draw_card(deck))
+    
+    # Deduct additional bet for split hand
+    player_money -= current_bet
+    
+    # Activate split mode
+    split_active = True
+    can_split = False  # Can't split again
+    
+    # Display hands
+    print("Splitting hands!")
+    print(f"First hand: {display_hand(player_hand)}")
+    print(f"First hand score: {calculate_score(player_hand)}")
+    print(f"Split hand: {display_hand(split_hand)}")
+    print(f"Split hand score: {calculate_score(split_hand)}")
+    print(f"Additional bet: ${current_bet}")
+    print(f"Remaining money: ${player_money}")
+
+def quick_bet():
+    """Place a quick bet with the selected chip value."""
+    global current_bet, player_money
+    
+    if selected_chip <= player_money:
+        current_bet = selected_chip
+        player_money -= current_bet
+        print(f"Quick bet placed: ${current_bet}")
+        start_new_game()
+        return True
+    else:
+        print("Not enough money for that chip!")
+        return False
+
+def place_bet(bet_amount):
+    """Place a bet."""
+    global current_bet, player_money
+    
+    if bet_amount <= player_money:
+        current_bet = bet_amount
+        player_money -= current_bet
+        print(f"Bet placed: ${current_bet}")
+        return True
+    else:
+        print("Not enough money!")
+        return False
+
+def start_new_game():
+    """Start a new game."""
+    global player_hand, dealer_hand, deck, game_over, player_turn, player_stood
+    global game_result, current_bet, can_double_down, can_split
+    global double_down_active, split_active, split_hand, split_turn, stats
+    
+    # Reset game state
+    player_hand = []
+    dealer_hand = []
+    game_over = False
+    player_turn = True
+    player_stood = False
+    game_result = ""
+    can_double_down = False
+    can_split = False
+    double_down_active = False
+    split_active = False
+    split_hand = []
+    split_turn = False
+    
+    # Create a new deck
+    deck = create_deck()
+    
+    # Deal initial cards
+    player_hand.append(draw_card(deck))
+    dealer_hand.append(draw_card(deck))
+    player_hand.append(draw_card(deck))
+    dealer_hand.append(draw_card(deck))
+    
+    # Display initial state
+    print("\n--- NEW GAME ---")
+    print(f"Your hand: {display_hand(player_hand)}")
+    print(f"Your score: {calculate_score(player_hand)}")
+    print(f"Dealer shows: {display_card(dealer_hand[1])}")
+    
+    if tutorial_mode:
+        print("\n[TUTORIAL] In blackjack, your goal is to get a hand value closer to 21 than the dealer without going over 21.")
+        print("[TUTORIAL] Cards 2-10 are worth their face value. Jacks, Queens, and Kings are worth 10. Aces are worth 11 or 1.")
+        print("[TUTORIAL] The dealer has one card hidden. You make decisions based on your cards and the dealer's visible card.")
+    
+    # Check if player can double down or split
+    can_double_down = can_double_down_check(player_hand)
+    can_split = can_split_check(player_hand)
+    
+    # Check for blackjack
+    if not handle_blackjack():
+        available_options = "(H)it, (S)tand"
+        if can_double_down:
+            available_options += ", (D)ouble down"
+        if can_split:
+            available_options += ", S(P)lit"
+        
+        print("\nYour turn:")
+        print(f"Options: {available_options}")
+        
+        if tutorial_mode:
+            print("\n[TUTORIAL] Available actions:")
+            print("[TUTORIAL] Hit (H): Draw another card to try to get closer to 21. Risk busting if you go over 21.")
+            print("[TUTORIAL] Stand (S): Keep your current hand and end your turn. Dealer will then play.")
+            if can_double_down:
+                print("[TUTORIAL] Double Down (D): Double your bet, get exactly one more card, then stand.")
+            if can_split:
+                print("[TUTORIAL] Split (P): If you have two cards of the same rank, you can split them into two separate hands.")
+    
+    # Update stats
+    stats['games_played'] += 1
+
+def display_statistics():
+    """Display game statistics."""
+    print("\n--- GAME STATISTICS ---")
+    print(f"Games Played: {stats['games_played']}")
+    print(f"Player Wins: {stats['player_wins']}")
+    print(f"Dealer Wins: {stats['dealer_wins']}")
+    print(f"Pushes: {stats['pushes']}")
+    print(f"Blackjacks: {stats['blackjacks']}")
+    print(f"Busts: {stats['busts']}")
+    win_rate = stats['player_wins'] / max(1, stats['games_played']) * 100
+    print(f"Win Rate: {win_rate:.1f}%")
+    print(f"Maximum Money: ${stats['max_money']}")
+    print(f"Biggest Win: ${stats['biggest_win']}")
+    print("----------------------")
+
+def display_help():
+    """Display help information."""
+    print("\n--- BLACKJACK HELP ---")
+    print("Commands:")
+    print("  H or HIT: Draw another card")
+    print("  S or STAND: End your turn")
+    print("  D or DOUBLE: Double your bet and take exactly one more card")
+    print("  P or SPLIT: Split your hand if you have two cards of the same rank")
+    print("  B or BET [amount]: Place a bet with the specified amount")
+    print("  QUICK or Q: Place a quick bet with selected chip value")
+    print("  CHIPS: Display available chip values")
+    print("  STATS: Display game statistics")
+    print("  TUTORIAL or T: Enable/disable tutorial mode")
+    print("  HELP: Display this help message")
+    print("  QUIT: Exit the game")
+    print("----------------------")
+
+def display_blackjack_tutorial():
+    """Display a comprehensive tutorial about blackjack."""
+    print("\n--- BLACKJACK TUTORIAL ---")
+    print("OBJECTIVE:")
+    print("  The goal of blackjack is to beat the dealer by having a hand value as close to 21 as possible without exceeding 21.")
+    
+    print("\nCARD VALUES:")
+    print("  • Number cards (2-10) are worth their face value")
+    print("  • Face cards (Jack, Queen, King) are worth 10 points")
+    print("  • Aces are worth 11 points, but can be reduced to 1 point if the hand would otherwise bust")
+    
+    print("\nGAME FLOW:")
+    print("  1. Place a bet")
+    print("  2. You and the dealer both receive two cards")
+    print("  3. One of the dealer's cards remains hidden")
+    print("  4. You make decisions on your hand (hit, stand, etc.)")
+    print("  5. Once you stand or bust, the dealer reveals their hidden card")
+    print("  6. The dealer must hit until they have 17 or more points")
+    print("  7. The closer hand to 21 without busting wins")
+    
+    print("\nBASIC ACTIONS:")
+    print("  • HIT (H): Draw another card")
+    print("  • STAND (S): End your turn and keep your current hand")
+    
+    print("\nADVANCED ACTIONS:")
+    print("  • DOUBLE DOWN (D): Double your bet, draw exactly one more card, then stand")
+    print("  • SPLIT (P): If your first two cards have the same rank, you can split them into two separate hands")
+    
+    print("\nOUTCOMES:")
+    print("  • BLACKJACK: An Ace and a 10-value card as your first two cards (pays 3:2)")
+    print("  • WIN: Your final hand value is closer to 21 than the dealer's hand, or the dealer busts (pays 1:1)")
+    print("  • LOSE: Your hand exceeds 21 (bust) or the dealer's hand is closer to 21 than yours")
+    print("  • PUSH: Your hand value equals the dealer's hand value (your bet is returned)")
+    
+    print("\nBASIC STRATEGY TIPS:")
+    print("  • Stand when your hand is 17 or higher")
+    print("  • Hit when your hand is 8 or lower")
+    print("  • If you have 9-11, consider doubling down if the dealer shows a low card (2-6)")
+    print("  • Always split Aces and 8s")
+    print("  • Never split 10s or 5s")
+    print("  • If the dealer shows a 7 or higher, keep hitting until you reach at least 17")
+    
+    print("\nEnable TUTORIAL mode during gameplay for step-by-step guidance!")
+    print("-------------------------")
+    
+    input("Press Enter to continue...")
+
+def toggle_tutorial_mode():
+    """Toggle tutorial mode on/off."""
+    global tutorial_mode
+    tutorial_mode = not tutorial_mode
+    if tutorial_mode:
+        print("\nTutorial mode ENABLED. You'll receive guidance during gameplay.")
+        print("The tutorial will explain each move and strategy as you play.")
+    else:
+        print("\nTutorial mode DISABLED.")
+
+def main():
+    """Main game loop."""
+    global player_money, current_bet, selected_chip
+    
+    print("Welcome to Command Line Blackjack!")
+    print(f"You have ${player_money}")
+    print("Type HELP for commands or TUTORIAL for game instructions")
+    
+    while True:
+        if player_money <= 0:
+            print("You're out of money! Game over.")
+            display_statistics()
+            break
+        
+        if current_bet == 0:
+            # Betting phase
+            print(f"\nYour money: ${player_money}")
+            print("Available chips: $1, $5, $25, $100")
+            print(f"Selected chip: ${selected_chip}")
+            print("Enter BET [amount] or QUICK for quick bet with selected chip")
+            
+            command = input("> ").strip().upper()
+            
+            if command == "QUIT":
+                print("Thanks for playing!")
+                break
+            elif command == "STATS":
+                display_statistics()
+            elif command == "HELP":
+                display_help()
+            elif command == "TUTORIAL" or command == "T":
+                display_blackjack_tutorial()
+            elif command == "TOGGLE" or command == "TOGGLE TUTORIAL":
+                toggle_tutorial_mode()
+            elif command == "CHIPS":
+                print("Available chips: $1, $5, $25, $100")
+                chip_choice = input("Select a chip value: $").strip()
+                if chip_choice in ["1", "5", "25", "100"]:
+                    selected_chip = int(chip_choice)
+                    print(f"Selected chip: ${selected_chip}")
+                else:
+                    print("Invalid chip value!")
+            elif command == "QUICK" or command == "Q":
+                quick_bet()
+            elif command.startswith("BET "):
+                try:
+                    bet_amount = int(command.split()[1])
+                    if place_bet(bet_amount):
+                        start_new_game()
+                except (ValueError, IndexError):
+                    print("Invalid bet amount!")
+            else:
+                print("Unknown command. Type HELP for commands.")
+        
+        elif not game_over:
+            # Game phase
+            if player_turn:
+                # Display available options clearly
+                available_options = "H (Hit), S (Stand)"
+                if can_double_down:
+                    available_options += ", D (Double Down)"
+                if can_split:
+                    available_options += ", P (Split)"
+                
+                print(f"\nAvailable actions: {available_options}")
+                command = input("> ").strip().upper()
+                
+                if command == "H" or command == "HIT":
+                    player_hit()
+                elif command == "S" or command == "STAND":
+                    player_stand()
+                elif (command == "D" or command == "DOUBLE") and can_double_down:
+                    player_double_down()
+                elif (command == "P" or command == "SPLIT") and can_split:
+                    player_split()
+                elif command == "QUIT":
+                    print("Thanks for playing!")
+                    break
+                elif command == "STATS":
+                    display_statistics()
+                elif command == "HELP":
+                    display_help()
+                elif command == "TUTORIAL" or command == "T":
+                    toggle_tutorial_mode()
+                else:
+                    print("Invalid command or option not available!")
+                    print(f"Available options: {available_options}")
+            else:
+                # Dealer's turn
+                time.sleep(1)
+                dealer_play()
+        
+        else:
+            # Game over, show result and ask for new game
+            print(f"\nGame over! {game_result}")
+            print(f"Your money: ${player_money}")
+            
+            print("Options: Y (Play Again), N (Quit), STATS, HELP")
+            command = input("> ").strip().upper()
+            
+            if command == "Y" or command == "YES":
+                current_bet = 0  # Reset bet for new game
+            elif command == "N" or command == "NO" or command == "QUIT":
+                print("Thanks for playing!")
+                display_statistics()
+                break
+            elif command == "STATS":
+                display_statistics()
+            elif command == "HELP":
+                display_help()
+            elif command == "TUTORIAL" or command == "T":
+                toggle_tutorial_mode()
+            else:
+                print("Invalid command!")
+
+if __name__ == "__main__":
+    main()
